@@ -1,0 +1,5 @@
+[program:unbound]
+command=/usr/sbin/unbound -d -c /etc/unbound/unbound.conf
+autorestart=true
+autostart=false
+priority=1
