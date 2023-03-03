@@ -6,6 +6,9 @@ ARG HOSTNAME="server.claudiomano.duckdns.org"
 ARG ISPCONFIG_MARIADB_USER="ispconfig"
 ARG ISPCONFIG_MARIADB_DATABASE="dbispconfig"
 ARG MARIADB_ROOT_PASSWORD="root"
+ARG BUILD_PHPMYADMIN_USER="root"
+ARG BUILD_PHPMYADMIN_VERSION="5.2.1"
+ARG BUILD_PHPMYADMIN_PW="root"
 ARG BUILD_MYSQL_REMOTE_ACCESS_HOST="172.%.%.%"
 ARG BUILD_TZ="Europe/London"
 
@@ -90,11 +93,53 @@ RUN curl https://get.acme.sh | sh -s
 RUN apt-get update && apt-get -y install python3-pip && pip install mailman
 
 # # --- 13 Install PureFTPd and Quota
-COPY ./build/etc/default/pure-ftpd-common /etc/default/pure-ftpd-common
 RUN apt-get -y install pure-ftpd-common pure-ftpd-mysql quota quotatool && \
     openssl dhparam -out /etc/ssl/private/pure-ftpd-dhparams.pem 2048 && \
     echo 1 > /etc/pure-ftpd/conf/TLS && \
     mkdir -p /etc/ssl/private/ && \
-    yes "" | openssl req -x509 -nodes -days 7300 -newkey rsa:2048 -keyout /etc/ssl/private/pure-ftpd.pem -out /etc/ssl/private/pure-ftpd.pem && \
-    chmod 600 /etc/ssl/private/pure-ftpd.pem && \
-    service pure-ftpd-mysql restart
+    yes "" | openssl req -x509 -nodes -days 7300 -newkey rsa:2048 -keyout /etc/ssl/private/pure-ftpd.pem -out /etc/ssl/private/pure-ftpd.pem || true && \
+    chmod 600 /etc/ssl/private/pure-ftpd.pem
+COPY ./build/etc/default/pure-ftpd-common /etc/default/pure-ftpd-common
+RUN service pure-ftpd-mysql restart
+
+# # --- 14 Install BIND DNS Server
+RUN apt-get -y install bind9 dnsutils haveged
+
+# # --- 15 Install Webalizer, AWStats and GoAccess
+RUN apt-get -y install awffull awstats goaccess geoip-database libclass-dbi-mysql-perl libtimedate-perl
+COPY ./build/etc/cron.d/awstats /etc/cron.d/awstats
+
+# # --- 16 Install Jailkit
+
+# # --- 17 Install Jailkit
+RUN touch /var/log/auth.log && \
+    touch /var/log/mail.log && \
+    touch /var/log/syslog && \
+    apt-get -y install fail2ban ufw
+COPY ./build/etc/fail2ban/jail.local /etc/fail2ban/jail.local
+RUN service fail2ban restart
+
+# --- 18 Install PHPMyAdmin Database Administration Tool
+# https://www.linuxbabe.com/debian/install-phpmyadmin-apache-lamp-debian-10-buster
+COPY ./build/etc/phpmyadmin/config.inc.php /tmp/phpmyadmin.config.inc.php
+COPY ./build/etc/apache2/phpmyadmin.conf /etc/apache2/conf-available/phpmyadmin.conf
+RUN apt-get update && \
+    wget "https://files.phpmyadmin.net/phpMyAdmin/${BUILD_PHPMYADMIN_VERSION}/phpMyAdmin-${BUILD_PHPMYADMIN_VERSION}-all-languages.zip" -q -O "/tmp/phpMyAdmin-${BUILD_PHPMYADMIN_VERSION}-all-languages.zip" && \
+    unzip -q "/tmp/phpMyAdmin-${BUILD_PHPMYADMIN_VERSION}-all-languages.zip" -d /usr/share/ && \
+    mv "/usr/share/phpMyAdmin-${BUILD_PHPMYADMIN_VERSION}-all-languages" /usr/share/phpmyadmin && \
+    chown -R www-data:www-data /usr/share/phpmyadmin && \
+    service mariadb restart && \
+    mysql -h localhost -uroot -p${MARIADB_ROOT_PASSWORD} -e "CREATE DATABASE phpmyadmin DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" && \
+    mysql -h localhost -uroot -p${MARIADB_ROOT_PASSWORD} -e "GRANT ALL ON phpmyadmin.* TO '${BUILD_PHPMYADMIN_USER}'@'localhost' IDENTIFIED BY '${BUILD_PHPMYADMIN_PW}';" && \
+    /usr/sbin/a2enconf phpmyadmin.conf && \
+    mv /tmp/phpmyadmin.config.inc.php /usr/share/phpmyadmin/config.inc.php && \
+    sed -i "s|\['controlhost'\] = '';|\['controlhost'\] = 'localhost';|" /usr/share/phpmyadmin/config.inc.php && \
+    sed -i "s|\['controluser'\] = '';|\['controluser'\] = '${BUILD_PHPMYADMIN_USER}';|" /usr/share/phpmyadmin/config.inc.php && \
+    sed -i "s|\['controlpass'\] = '';|\['controlpass'\] = '${BUILD_PHPMYADMIN_PW}';|" /usr/share/phpmyadmin/config.inc.php && \
+    mkdir -p /var/lib/phpmyadmin/tmp && \
+    chown www-data:www-data /var/lib/phpmyadmin/tmp && \
+    service apache2 restart && \
+    service apache2 reload; \
+    service apache2 restart
+
+EXPOSE 20 21 22 53/udp 53/tcp 80 443 953 8080 30000 30001 30002 30003 30004 30005 30006 30007 30008 30009 3306
