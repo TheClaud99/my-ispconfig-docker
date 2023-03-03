@@ -6,6 +6,7 @@ services:
     container_name: ispconfig
     hostname: ispconfig
     domainname: claudiomano.duckdns.org
+    privileged: true
     environment:
       - LANGUAGE=C
       - LANG=C.UTF-8
@@ -48,8 +49,13 @@ services:
       "30000-30009", # pure-ftpd
     ]
 
-  db:
-    image: mariadb
-    restart: always
-    environment:
-      MARIADB_ROOT_PASSWORD: root
+    command: [ "/bin/bash" ]
+    stdin_open: true
+    tty: true
+
+
+  # db:
+  #   image: mariadb
+  #   restart: always
+  #   environment:
+  #     MARIADB_ROOT_PASSWORD: root
