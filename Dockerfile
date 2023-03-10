@@ -11,6 +11,7 @@ ARG BUILD_PHPMYADMIN_VERSION="5.2.1"
 ARG BUILD_PHPMYADMIN_PW="root"
 ARG BUILD_MYSQL_REMOTE_ACCESS_HOST="172.%.%.%"
 ARG BUILD_TZ="Europe/London"
+ARG BUILD_ISPCONFIG_VERSION="3.2.9p1"
 
 # --- 5 Update your Debian Installation
 COPY ./build/etc/apt/sources.list /etc/apt/sources.list
@@ -141,5 +142,21 @@ RUN apt-get update && \
     service apache2 restart && \
     service apache2 reload; \
     service apache2 restart
+
+# --- 20 Install ISPConfig 3
+WORKDIR /tmp
+RUN wget "https://ispconfig.org/downloads/ISPConfig-${BUILD_ISPCONFIG_VERSION}.tar.gz" -q && \
+    tar xfz ISPConfig-${BUILD_ISPCONFIG_VERSION}.tar.gz
+
+COPY ./build/autoinstall.ini /tmp/ispconfig3_install/install/autoinstall.ini
+WORKDIR /tmp/ispconfig3_install/install
+# hadolint ignore=SC2086
+RUN touch "/etc/mailname" && \
+    # preparo il file autoinstall.ini e lo passo come parametro all'installer di ispconfig
+    sed -i "s/mysql_root_password=pass/mysql_root_password=${MARIADB_ROOT_PASSWORD}/" autoinstall.ini && \
+    sed -i "s/mysql_database=dbispconfig/mysql_database=${ISPCONFIG_MARIADB_DATABASE}/" autoinstall.ini && \
+    sed -i "s/^hostname=server1.example.com$/hostname=${HOSTNAME}/g" autoinstall.ini && \
+    sed -i "s/^ssl_cert_common_name=server1.example.com$/ssl_cert_common_name=${HOSTNAME}/g" autoinstall.ini && \
+    service mariadb restart && php -q install.php --autoinstall=autoinstall.ini
 
 EXPOSE 20 21 22 53/udp 53/tcp 80 443 953 8080 30000 30001 30002 30003 30004 30005 30006 30007 30008 30009 3306
