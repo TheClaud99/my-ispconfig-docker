@@ -13,8 +13,14 @@ ARG BUILD_MYSQL_REMOTE_ACCESS_HOST="172.%.%.%"
 ARG BUILD_TZ="Europe/London"
 ARG BUILD_ISPCONFIG_VERSION="3.2.9p1"
 
+ENV POSTGREY_DELAY=300
+ENV POSTGREY_MAX_AGE=35
+ENV POSTGREY_TEXT="Delayed by postgrey"
+
 # --- 5 Update your Debian Installation
+# metto la source list con i pacchetti non-free
 COPY ./build/etc/apt/sources.list /etc/apt/sources.list
+# aggiungo la repository per php8
 COPY ./build/etc/apt/sources.list.d/php.list /etc/apt/sources.list.d/php.list
 
 
@@ -28,6 +34,11 @@ RUN apt-get update && \
     borgbackup cron patch rsyslog rsyslog-relp logrotate supervisor git sendemail wget sudo curl \
     # --- 3 Install a shell text editor
     nano
+
+# Create the log file to be able to run tail
+RUN touch /var/log/cron.log && \
+    touch /var/spool/cron/root && \
+    crontab /var/spool/cron/root
 
 # --- 5 Update your Debian Installation
 # aggiungo la chiave per la repo di php
@@ -48,7 +59,7 @@ RUN apt-get -y install mariadb-client
 RUN printf "mariadb-server mariadb-server/root_password password %s\n" "${MARIADB_ROOT_PASSWORD}"       | debconf-set-selections && \
     printf "mariadb-server mariadb-server/root_password_again password %s\n" "${MARIADB_ROOT_PASSWORD}" | debconf-set-selections && \
     apt-get install -y mariadb-server && \
-    service mariadb start
+    service mariadb restart
 
 # copy configuration files
 COPY ./build/etc/mysql/debian.cnf /etc/mysql
@@ -85,13 +96,21 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     /usr/sbin/a2enmod suexec rewrite ssl actions include dav_fs dav auth_digest cgi headers actions proxy_fcgi alias
 COPY ./build/etc/apache2/httpoxy.conf /etc/apache2/conf-available/
-RUN service apache2 restart
+COPY ./build/etc/aliases /etc/aliases
+RUN apt-get update && \
+    printf "ServerName %s\n" "${HOSTNAME}" > /etc/apache2/conf-available/fqdn.conf && \
+    /usr/sbin/a2enconf fqdn && \
+    /usr/sbin/a2enconf httpoxy && \
+    usr/sbin/a2enmod actions proxy_fcgi alias setenvif && \
+    /usr/sbin/a2enconf php${BUILD_PHP_VERS}-fpm && \
+    service apache2 restart && \
+    newaliases
 
 # # --- 11 Install Let's Encrypt
 RUN curl https://get.acme.sh | sh -s
 
-# # --- 12 Install Mailman
-RUN apt-get update && apt-get -y install python3-pip && pip install mailman
+# # --- 12 Install Mailman (attualmente mailman3 non è supportato)
+# RUN apt-get update && apt-get -y install python3-pip && pip install mailman
 
 # # --- 13 Install PureFTPd and Quota
 RUN apt-get -y install pure-ftpd-common pure-ftpd-mysql quota quotatool && \
@@ -159,4 +178,41 @@ RUN touch "/etc/mailname" && \
     sed -i "s/^ssl_cert_common_name=server1.example.com$/ssl_cert_common_name=${HOSTNAME}/g" autoinstall.ini && \
     service mariadb restart && php -q install.php --autoinstall=autoinstall.ini
 
+RUN sed -i "s|NameVirtualHost|#NameVirtualHost|" "/etc/apache2/sites-enabled/000-ispconfig.conf" && \
+    sed -i "s|NameVirtualHost|#NameVirtualHost|" "/etc/apache2/sites-enabled/000-ispconfig.vhost" && \
+    # cambio l'host del db dopo l'installazione
+    sed -i "s|\$conf\['db_host'\] = '\(.*\)';|\$conf\['db_host'\] = 'localhost';|" "/usr/local/ispconfig/interface/lib/config.inc.php" && \
+    sed -i "s|^hosts = .*|hosts = localhost|" /etc/postfix/mysql-*
+
+#
+# docker-extensions
+#
+RUN mkdir -p /usr/local/bin
+COPY ./build/bin/* /usr/local/bin/
+RUN chmod a+x /usr/local/bin/*
+
+#
+# establish supervisord
+#
+COPY ./build/supervisor /etc/supervisor
+COPY ./build/etc/init.d /etc/init.d
+
+# link old /etc/init.d/ startup scripts to supervisor
+RUN ln -sf /etc/supervisor/systemctl /bin/systemctl && \
+    chmod a+x /etc/supervisor/* /etc/supervisor/*.d/*
+COPY ./build/supervisor/invoke-rc.d /usr/sbin/invoke-rc.d
+
+ENV TERM xterm
+
+RUN printf "export TERM=xterm\n" >> /root/.bashrc
+
 EXPOSE 20 21 22 53/udp 53/tcp 80 443 953 8080 30000 30001 30002 30003 30004 30005 30006 30007 30008 30009 3306
+
+
+#
+# startup script
+#
+COPY ./build/start.sh /start.sh
+RUN chmod 755 /start.sh
+CMD ["/start.sh"]
+WORKDIR /
